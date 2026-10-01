@@ -24,12 +24,12 @@ MAPA_COLABORADORES = {
 
 def processar_imagem_com_fallback(client, prompt, img):
     """
-    Executa a extração em cascata utilizando os modelos estáveis da família Flash.
+    Executa a extração em cascata utilizando os modelos ativos da geração Gemini 3.x.
     """
     modelos_candidatos = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview"
     ]
     erros_acumulados = []
 
@@ -143,7 +143,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                         cols[i].image(g_path, caption=f"Matriz {i+1}")
                 else:
                     st.warning(
-                        f"⚠️ Nenhuma matriz encontrada na pasta /gabaritos para a matrícula {matricula}."
+                        f"⚠️️ Nenhuma matriz encontrada na pasta /gabaritos para a matrícula {matricula}."
                     )
 
             except Exception as e:
