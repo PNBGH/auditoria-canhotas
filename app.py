@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import pandas as pd
 from PIL import Image
 import streamlit as st
@@ -15,6 +16,11 @@ if not api_key:
     st.stop()
 
 client = genai.Client(api_key=api_key)
+
+# Mapeamento auxiliar: Nome -> Matrícula (para canhotos sem matrícula preenchida)
+MAPA_COLABORADORES = {
+    "ALDO GOMES": "1002",
+}
 
 st.sidebar.header("Parâmetros do Contrato")
 valor_unitario = st.sidebar.number_input(
@@ -35,7 +41,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
     if not canhotas_pdf or not fatura_pdf:
         st.warning("Envie ambos os documentos para iniciar.")
     else:
-        with st.spinner("Processando auditoria..."):
+        with st.spinner("Processando auditoria com IA..."):
             try:
                 img = (
                     Image.open(canhotas_pdf)
@@ -46,48 +52,68 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 prompt = """
                 Analise esta canhoteira e extraia estritamente este JSON:
                 {
-                    "matricula": "string apenas com numeros",
+                    "colaborador": "nome completo do colaborador escrito na folha",
+                    "matricula": "string apenas com numeros ou N/A se estiver em branco",
                     "quantidade_pecas": integer_numero_de_pecas,
                     "status_assinatura": "descrição breve do traço"
                 }
                 """
 
+                dados = None
                 if img:
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=[prompt, img],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json"
-                        ),
-                    )
-                    dados = json.loads(response.text)
+                    # Retry Loop para contornar instabilidade 503
+                    for tentativa in range(3):
+                        try:
+                            response = client.models.generate_content(
+                                model="gemini-2.0-flash",
+                                contents=[prompt, img],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json"
+                                ),
+                            )
+                            dados = json.loads(response.text)
+                            break
+                        except Exception as err:
+                            if "503" in str(err) and tentativa < 2:
+                                time.sleep(2)
+                                continue
+                            else:
+                                raise err
                 else:
                     dados = {
+                        "colaborador": "ALDO GOMES",
                         "matricula": "1002",
-                        "quantidade_pecas": 12,
+                        "quantidade_pecas": 2,
                         "status_assinatura": "Assinado",
                     }
 
-                matricula = str(dados.get("matricula", "N/A"))
+                nome_lido = str(dados.get("colaborador", "")).strip().upper()
+                matricula = str(dados.get("matricula", "N/A")).strip()
+
+                # Fallback: Se matrícula não foi escrita no papel, busca pelo nome
+                if matricula in ["N/A", "", "None"] and nome_lido in MAPA_COLABORADORES:
+                    matricula = MAPA_COLABORADORES[nome_lido]
+
                 qtd_lida = int(dados.get("quantidade_pecas", 0))
                 total_calculado = qtd_lida * valor_unitario
 
                 gabaritos = []
-                if os.path.exists("gabaritos"):
+                if os.path.exists("gabaritos") and matricula != "N/A":
                     for idx in [1, 2, 3]:
                         path = f"gabaritos/{matricula}_{idx}.jpg"
                         if os.path.exists(path):
                             gabaritos.append(path)
 
                 st.subheader("📋 Relatório da Auditoria")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Matrícula Detectada", matricula)
-                m2.metric("Peças Apuradas", f"{qtd_lida} un")
-                m3.metric("Total Calculado (Python)", f"R$ {total_calculado:.2f}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Colaborador", nome_lido if nome_lido else "N/A")
+                m2.metric("Matrícula Associada", matricula)
+                m3.metric("Peças Apuradas", f"{qtd_lida} un")
+                m4.metric("Total Calculado", f"R$ {total_calculado:.2f}")
 
                 if gabaritos:
                     st.success(
-                        f"✓ {len(gabaritos)} Gabaritos validados para a matrícula {matricula}."
+                        f"✓ {len(gabaritos)} Gabarito(s) de assinatura validado(s) para a matrícula {matricula}."
                     )
                     cols = st.columns(len(gabaritos))
                     for i, g_path in enumerate(gabaritos):
