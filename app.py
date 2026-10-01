@@ -17,7 +17,7 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
-# Mapeamento auxiliar: Nome -> Matrícula (para canhotos sem matrícula preenchida)
+# Mapeamento de contingência: Nome do Colaborador -> Matrícula
 MAPA_COLABORADORES = {
     "ALDO GOMES": "1002",
 }
@@ -61,11 +61,11 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
 
                 dados = None
                 if img:
-                    # Retry Loop para contornar instabilidade 503
+                    # Retry Loop para instabilidade 503
                     for tentativa in range(3):
                         try:
                             response = client.models.generate_content(
-                                model="gemini-2.0-flash",
+                                model="gemini-3.8-flash",
                                 contents=[prompt, img],
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json"
@@ -90,7 +90,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 nome_lido = str(dados.get("colaborador", "")).strip().upper()
                 matricula = str(dados.get("matricula", "N/A")).strip()
 
-                # Fallback: Se matrícula não foi escrita no papel, busca pelo nome
+                # Associação por Nome se Matrícula estiver N/A
                 if matricula in ["N/A", "", "None"] and nome_lido in MAPA_COLABORADORES:
                     matricula = MAPA_COLABORADORES[nome_lido]
 
