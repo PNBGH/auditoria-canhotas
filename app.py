@@ -24,12 +24,12 @@ MAPA_COLABORADORES = {
 
 def processar_imagem_com_fallback(client, prompt, img):
     """
-    Alterna entre modelos oficiais e executa retentativas em caso de oscilações na nuvem.
+    Alterna entre os modelos ativos de produção (2.5 e 2.0) e aplica retentativas em caso de indisponibilidade.
     """
     modelos_candidatos = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro"
+        "gemini-2.5-pro"
     ]
     ultimo_erro = None
 
@@ -48,17 +48,17 @@ def processar_imagem_com_fallback(client, prompt, img):
                 ultimo_erro = err
                 msg_erro = str(err)
                 
-                # Instabilidade temporária (503/429): aguarda e tenta novamente no mesmo modelo
+                # Instabilidade temporária (503/429/UNAVAILABLE): aguarda e tenta novamente no mesmo modelo
                 if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE"]):
                     time.sleep(2 * (tentativa + 1))
                     continue
-                # Modelo não encontrado (404): passa imediatamente para o próximo modelo da lista
+                # Modelo não encontrado ou incompatível (404): pula imediatamente para o próximo modelo da lista
                 elif "404" in msg_erro or "NOT_FOUND" in msg_erro:
                     break
                 else:
                     break
     
-    raise RuntimeError(f"Falha ao conectar aos serviços da IA: {str(ultimo_erro)}")
+    raise RuntimeError(f"Falha na conexão com os modelos ativos da IA: {str(ultimo_erro)}")
 
 st.sidebar.header("Parâmetros do Contrato")
 valor_unitario = st.sidebar.number_input(
