@@ -24,10 +24,13 @@ MAPA_COLABORADORES = {
 
 def processar_imagem_com_fallback(client, prompt, img):
     """
-    Alterna automaticamente entre modelos e reexecuta com retentativa exponencial
-    em caso de instabilidade 503 ou alta demanda.
+    Alterna entre modelos oficiais e executa retentativas em caso de oscilações na nuvem.
     """
-    modelos_candidatos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    modelos_candidatos = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro"
+    ]
     ultimo_erro = None
 
     for modelo in modelos_candidatos:
@@ -44,13 +47,18 @@ def processar_imagem_com_fallback(client, prompt, img):
             except Exception as err:
                 ultimo_erro = err
                 msg_erro = str(err)
+                
+                # Instabilidade temporária (503/429): aguarda e tenta novamente no mesmo modelo
                 if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE"]):
                     time.sleep(2 * (tentativa + 1))
                     continue
+                # Modelo não encontrado (404): passa imediatamente para o próximo modelo da lista
+                elif "404" in msg_erro or "NOT_FOUND" in msg_erro:
+                    break
                 else:
                     break
     
-    raise RuntimeError(f"Servidores ocupados em todos os modelos de contingência: {str(ultimo_erro)}")
+    raise RuntimeError(f"Falha ao conectar aos serviços da IA: {str(ultimo_erro)}")
 
 st.sidebar.header("Parâmetros do Contrato")
 valor_unitario = st.sidebar.number_input(
@@ -103,7 +111,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 nome_lido = str(dados.get("colaborador", "")).strip().upper()
                 matricula = str(dados.get("matricula", "N/A")).strip()
 
-                # Associação por Nome caso a matrícula esteja N/A
+                # Associação por Nome caso a matrícula esteja em branco/N/A
                 if matricula in ["N/A", "", "None"] and nome_lido in MAPA_COLABORADORES:
                     matricula = MAPA_COLABORADORES[nome_lido]
 
