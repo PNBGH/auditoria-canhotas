@@ -24,14 +24,14 @@ MAPA_COLABORADORES = {
 
 def processar_imagem_com_fallback(client, prompt, img):
     """
-    Alterna entre os modelos ativos de produção (2.5 e 2.0) e aplica retentativas em caso de indisponibilidade.
+    Executa a extração em cascata utilizando os modelos estáveis da família Flash.
     """
     modelos_candidatos = [
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-2.5-pro"
+        "gemini-1.5-flash"
     ]
-    ultimo_erro = None
+    erros_acumulados = []
 
     for modelo in modelos_candidatos:
         for tentativa in range(3):
@@ -45,20 +45,22 @@ def processar_imagem_com_fallback(client, prompt, img):
                 )
                 return json.loads(response.text)
             except Exception as err:
-                ultimo_erro = err
                 msg_erro = str(err)
+                erros_acumulados.append(f"[{modelo}] Tentativa {tentativa+1}: {msg_erro}")
                 
-                # Instabilidade temporária (503/429/UNAVAILABLE): aguarda e tenta novamente no mesmo modelo
+                # Congestionamento na nuvem (503/429/UNAVAILABLE): aguarda e tenta novamente no mesmo modelo
                 if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE"]):
                     time.sleep(2 * (tentativa + 1))
                     continue
-                # Modelo não encontrado ou incompatível (404): pula imediatamente para o próximo modelo da lista
+                # Modelo inexistente, descontinuado ou sem permissão (404/NOT_FOUND): avança para o próximo modelo
                 elif "404" in msg_erro or "NOT_FOUND" in msg_erro:
                     break
                 else:
                     break
     
-    raise RuntimeError(f"Falha na conexão com os modelos ativos da IA: {str(ultimo_erro)}")
+    # Se todos os modelos falharem, exibe os detalhes de cada falha
+    detalhes_falha = " | ".join(erros_acumulados)
+    raise RuntimeError(f"Indisponibilidade em todos os modelos de contingência. Log: {detalhes_falha}")
 
 st.sidebar.header("Parâmetros do Contrato")
 valor_unitario = st.sidebar.number_input(
