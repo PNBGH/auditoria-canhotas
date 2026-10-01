@@ -22,6 +22,36 @@ MAPA_COLABORADORES = {
     "ALDO GOMES": "1002",
 }
 
+def processar_imagem_com_fallback(client, prompt, img):
+    """
+    Alterna automaticamente entre modelos e reexecuta com retentativa exponencial
+    em caso de instabilidade 503 ou alta demanda.
+    """
+    modelos_candidatos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    ultimo_erro = None
+
+    for modelo in modelos_candidatos:
+        for tentativa in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=modelo,
+                    contents=[prompt, img],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    ),
+                )
+                return json.loads(response.text)
+            except Exception as err:
+                ultimo_erro = err
+                msg_erro = str(err)
+                if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE"]):
+                    time.sleep(2 * (tentativa + 1))
+                    continue
+                else:
+                    break
+    
+    raise RuntimeError(f"Servidores ocupados em todos os modelos de contingência: {str(ultimo_erro)}")
+
 st.sidebar.header("Parâmetros do Contrato")
 valor_unitario = st.sidebar.number_input(
     "Valor por Peça (R$)", value=15.00, step=0.50
@@ -41,7 +71,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
     if not canhotas_pdf or not fatura_pdf:
         st.warning("Envie ambos os documentos para iniciar.")
     else:
-        with st.spinner("Processando auditoria com IA..."):
+        with st.spinner("Processando auditoria com IA (com contingência ativa)..."):
             try:
                 img = (
                     Image.open(canhotas_pdf)
@@ -61,24 +91,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
 
                 dados = None
                 if img:
-                    # Retry Loop para instabilidade 503
-                    for tentativa in range(3):
-                        try:
-                            response = client.models.generate_content(
-                                model="gemini-3.8-flash",
-                                contents=[prompt, img],
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json"
-                                ),
-                            )
-                            dados = json.loads(response.text)
-                            break
-                        except Exception as err:
-                            if "503" in str(err) and tentativa < 2:
-                                time.sleep(2)
-                                continue
-                            else:
-                                raise err
+                    dados = processar_imagem_com_fallback(client, prompt, img)
                 else:
                     dados = {
                         "colaborador": "ALDO GOMES",
@@ -90,7 +103,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 nome_lido = str(dados.get("colaborador", "")).strip().upper()
                 matricula = str(dados.get("matricula", "N/A")).strip()
 
-                # Associação por Nome se Matrícula estiver N/A
+                # Associação por Nome caso a matrícula esteja N/A
                 if matricula in ["N/A", "", "None"] and nome_lido in MAPA_COLABORADORES:
                     matricula = MAPA_COLABORADORES[nome_lido]
 
