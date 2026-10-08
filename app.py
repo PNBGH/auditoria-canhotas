@@ -1,14 +1,16 @@
 import json
 import os
 import time
+import re
+import unicodedata
 import pandas as pd
 from PIL import Image
 import streamlit as st
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="Auditoria de Canhotas vs Fatura", layout="wide")
-st.title("🛡️ Painel de Auditoria Operacional - Canhotas vs. Fatura")
+st.set_page_config(page_title="Auditoria Automatizada de Canhotas", layout="wide")
+st.title("🛡️ Sistema de Auditoria Grafotécnica e Financeira")
 
 api_key = st.secrets.get("GEMINI_API_KEY")
 if not api_key:
@@ -17,23 +19,22 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
-# Mapeamento cadastral de contingência: Nome -> Matrícula
+# Cadastro Centralizado de Colaboradores (Nome Normalizado -> Matrícula)
 MAPA_COLABORADORES = {
     "ALDO GOMES": "1002",
     "RICARDO TEIXEIRA": "1003",
     "CLEITON": "1004"
 }
 
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode("utf-8")
+    return re.sub(r'[^A-Z0-9 ]', '', texto.upper().strip())
+
 def processar_com_fallback(client, prompt, contents):
-    """
-    Executa chamadas à IA utilizando os modelos oficiais e ativos do Gemini.
-    """
-    modelos_candidatos = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.0-flash"
-    ]
-    erros_acumulados = []
+    modelos_candidatos = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+    erros = []
 
     for modelo in modelos_candidatos:
         for tentativa in range(3):
@@ -47,231 +48,119 @@ def processar_com_fallback(client, prompt, contents):
                 )
                 return json.loads(response.text)
             except Exception as err:
-                msg_erro = str(err)
-                erros_acumulados.append(f"[{modelo}] Tentativa {tentativa+1}: {msg_erro}")
-                
-                if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
-                    time.sleep(3 * (tentativa + 1))
+                msg = str(err)
+                erros.append(f"[{modelo}] {msg}")
+                if any(code in msg for code in ["503", "429", "RESOURCE_EXHAUSTED"]):
+                    time.sleep(2 * (tentativa + 1))
                     continue
-                else:
-                    break
+                break
+    raise RuntimeError("Falha na comunicação com a IA. Detalhes: " + " | ".join(erros))
 
-    detalhes = " | ".join(erros_acumulados)
-    raise RuntimeError(f"Indisponibilidade na rede de IA. Log: {detalhes}")
-
-# Interface de Entrada de Arquivos
+# Interface
 col1, col2 = st.columns(2)
 with col1:
-    canhotas_files = st.file_uploader(
-        "1. Lote de Canhotas (Aceita múltiplos arquivos PDF ou Imagens)",
-        type=["pdf", "png", "jpg", "jpeg"],
-        accept_multiple_files=True
-    )
+    canhotas_files = st.file_uploader("1. Canhotas Recebidas", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 with col2:
-    fatura_file = st.file_uploader(
-        "2. Fatura / Relatório Mensal (PDF ou Imagem)",
-        type=["pdf", "png", "jpg", "jpeg"]
-    )
+    fatura_file = st.file_uploader("2. Fatura / Relatório Mensal", type=["pdf", "png", "jpg", "jpeg"])
 
-if st.button("🚀 Executar Auditoria Mensal", type="primary"):
+if st.button("🚀 Executar Auditoria de Precisão", type="primary"):
     if not canhotas_files or not fatura_file:
-        st.warning("Envie o lote de canhotas e a fatura para iniciar a auditoria.")
+        st.warning("Envie os arquivos para iniciar a auditoria.")
     else:
-        with st.spinner("Etapa 1/2: Analisando Fatura e extraindo itens e preços de contrato..."):
-            try:
-                # 1. Leitura e Extração da Fatura
-                fatura_contents = []
-                if fatura_file.type == "application/pdf":
-                    fatura_contents.append(types.Part.from_bytes(data=fatura_file.read(), mime_type="application/pdf"))
-                else:
-                    fatura_contents.append(Image.open(fatura_file))
+        with st.spinner("Analisando Fatura e Contrato..."):
+            fatura_contents = []
+            if fatura_file.type == "application/pdf":
+                fatura_contents.append(types.Part.from_bytes(data=fatura_file.read(), mime_type="application/pdf"))
+            else:
+                fatura_contents.append(Image.open(fatura_file))
 
-                prompt_fatura = """
-                Analise esta fatura/relatório de serviços/lavanderia e extraia os itens faturados no seguinte JSON estrito:
+            prompt_fatura = """
+            Extraia os itens faturados no formato JSON estrito:
+            {
+                "itens_fatura": [
+                    {"item": "nome", "quantidade": 0, "valor_unitario": 0.0, "valor_total": 0.0}
+                ],
+                "valor_total_fatura": 0.0
+            }
+            """
+            dados_fatura = processar_com_fallback(client, prompt_fatura, fatura_contents)
+
+        with st.spinner("Processando Auditoria Grafotécnica nas Canhotas..."):
+            canhotas_auditadas = []
+
+            for c_file in canhotas_files:
+                c_image = Image.open(c_file) if c_file.type != "application/pdf" else None
+                c_contents = [types.Part.from_bytes(data=c_file.read(), mime_type="application/pdf")] if c_file.type == "application/pdf" else [c_image]
+
+                # Etapa A: Leitura do Nome/Matrícula
+                prompt_leitura = """
+                Analise esta canhota e extraia:
                 {
-                    "itens_fatura": [
-                        {
-                            "item": "nome do item (ex: Macacão, Cinto, etc)",
-                            "quantidade": integer_quantidade_total_faturada,
-                            "valor_unitario": float_valor_unitario,
-                            "valor_total": float_valor_total_do_item
-                        }
-                    ],
-                    "valor_total_fatura": float_valor_total_geral
+                    "colaborador": "NOME DO COLABORADOR ou N/A",
+                    "matricula": "Apenas números ou N/A",
+                    "itens": [{"item": "nome", "quantidade": 1}]
                 }
                 """
-                dados_fatura = processar_com_fallback(client, prompt_fatura, fatura_contents)
+                res_leitura = processar_com_fallback(client, prompt_leitura, c_contents)
+                
+                nome_bruto = res_leitura.get("colaborador", "")
+                nome_norm = normalizar_texto(nome_bruto)
+                mat = str(res_leitura.get("matricula", "N/A")).strip()
 
-                # 2. Leitura e Extração do Lote de Canhotas
-                with st.spinner("Etapa 2/2: Auditando lote de canhotas e cruzando com o cadastro..."):
-                    canhotas_identificadas = []
-                    canhotas_nao_identificadas = []
+                # Busca de Matrícula por Inteligência de Cadastro
+                if mat in ["N/A", "", "None"]:
+                    for nome_cad, mat_cad in MAPA_COLABORADORES.items():
+                        if nome_cad in nome_norm or nome_norm in nome_cad:
+                            mat = mat_cad
+                            break
 
-                    prompt_canhota = """
-                    Analise este documento/imagem e extraia todas as canhotas de entrega presentes.
-                    Retorne estritamente um JSON neste formato:
+                # Etapa B: Comparação Grafotécnica com Gabarito
+                gabarito_path = f"gabaritos/{mat}_1.jpg"
+                status_grafotecnico = "SEM_GABARITO"
+                detalhe_grafotecnico = "Nenhum gabarito oficial cadastrado no repositório."
+
+                if os.path.exists(gabarito_path):
+                    gabarito_img = Image.open(gabarito_path)
+                    
+                    prompt_grafotecnico = """
+                    Você é um perito grafotécnico. Compare a ASSINATURA presente na CANHOTA com a ASSINATURA DO GABARITO OFICIAL fornecida.
+                    Responda estritamente no formato JSON:
                     {
-                        "canhotas": [
-                            {
-                                "colaborador": "NOME COMPLETO DO COLABORADOR ou N/A se em branco",
-                                "matricula": "string apenas números ou N/A se em branco",
-                                "itens": [
-                                    {
-                                        "item": "nome do item (ex: Macacão, Cinto)",
-                                        "quantidade": integer_quantidade
-                                    }
-                                ],
-                                "status_assinatura": "descrição breve do traço/assinatura"
-                            }
-                        ]
+                        "resultado_assinatura": "CONFORME" ou "SUSPEITA_DIVERGENCIA" ou "AUSENTE",
+                        "justificativa": "breve explicação dos traços, inclinação ou divergência observada"
                     }
                     """
-
-                    for c_file in canhotas_files:
-                        c_contents = []
-                        if c_file.type == "application/pdf":
-                            c_contents.append(types.Part.from_bytes(data=c_file.read(), mime_type="application/pdf"))
-                        else:
-                            c_contents.append(Image.open(c_file))
-
-                        res_canhota = processar_com_fallback(client, prompt_canhota, c_contents)
-                        lista = res_canhota.get("canhotas", [])
-
-                        for c in lista:
-                            nome = str(c.get("colaborador", "")).strip().upper()
-                            mat = str(c.get("matricula", "N/A")).strip()
-
-                            if mat in ["N/A", "", "None"] and nome in MAPA_COLABORADORES:
-                                mat = MAPA_COLABORADORES[nome]
-
-                            c["matricula"] = mat
-                            c["colaborador"] = nome if nome else "NÃO IDENTIFICADO"
-
-                            if mat != "N/A" or nome in MAPA_COLABORADORES:
-                                canhotas_identificadas.append(c)
-                            else:
-                                canhotas_nao_identificadas.append(c)
-
-                # Consolidação de Itens da Fatura
-                fatura_itens = {}
-                for item_f in dados_fatura.get("itens_fatura", []):
-                    nome_i = item_f.get("item", "Geral").strip().title()
-                    v_unit = float(item_f.get("valor_unitario", 0.0))
-                    qtd_f = int(item_f.get("quantidade", 0))
-                    fatura_itens[nome_i] = {
-                        "valor_unitario": v_unit,
-                        "qtd_faturada": qtd_f,
-                        "total_faturado": float(item_f.get("valor_total", v_unit * qtd_f))
-                    }
-
-                # Consolidação de Itens Apurados nas Canhotas Validadas
-                apurado_itens = {}
-                for c in canhotas_identificadas:
-                    itens_list = c.get("itens", [])
-                    if not itens_list and "quantidade_pecas" in c:
-                        itens_list = [{"item": "Peça", "quantidade": c.get("quantidade_pecas", 1)}]
+                    # Envia a canhota e a imagem de gabarito para a IA comparar
+                    inputs_comparacao = c_contents + [gabarito_img]
+                    res_grafo = processar_com_fallback(client, prompt_grafotecnico, inputs_comparacao)
                     
-                    for it in itens_list:
-                        nome_i = it.get("item", "Geral").strip().title()
-                        qtd = int(it.get("quantidade", 0))
-                        apurado_itens[nome_i] = apurado_itens.get(nome_i, 0) + qtd
+                    status_grafotecnico = res_grafo.get("resultado_assinatura", "SUSPEITA_DIVERGENCIA")
+                    detalhe_grafotecnico = res_grafo.get("justificativa", "")
 
-                # Construção da Tabela Comparativa
-                todos_itens = sorted(list(set(list(fatura_itens.keys()) + list(apurado_itens.keys()))))
-                
-                tabela_comparativa = []
-                total_apurado_rs = 0.0
-                total_faturado_rs = 0.0
+                canhotas_auditadas.append({
+                    "colaborador": nome_norm if nome_norm else "NÃO IDENTIFICADO",
+                    "matricula": mat,
+                    "itens": res_leitura.get("itens", []),
+                    "status_grafotecnico": status_grafotecnico,
+                    "detalhe_grafotecnico": detalhe_grafotecnico,
+                    "gabarito_path": gabarito_path if os.path.exists(gabarito_path) else None
+                })
 
-                for item_name in todos_itens:
-                    info_f = fatura_itens.get(item_name, {"valor_unitario": 0.0, "qtd_faturada": 0, "total_faturado": 0.0})
-                    v_unit = info_f["valor_unitario"]
-                    
-                    if v_unit == 0.0 and fatura_itens:
-                        v_unit = list(fatura_itens.values())[0]["valor_unitario"]
+        # Exibição do Painel
+        st.subheader("📊 Painel Executivo de Auditoria")
+        
+        # Alertas Grafotécnicos (Exceções)
+        suspeitas = [c for c in canhotas_auditadas if c["status_grafotecnico"] == "SUSPEITA_DIVERGENCIA"]
+        if suspeitas:
+            st.error(f"🚨 **ALERTA GRAFOTÉCNICO:** {len(suspeitas)} assinatura(s) apresentaram divergência com o gabarito oficial!")
+            for s in suspeitas:
+                st.warning(f" Colaborador: **{s['colaborador']}** (Matrícula: {s['matricula']}) | Parecer da IA: {s['detalhe_grafotecnico']}")
 
-                    qtd_apurada = apurado_itens.get(item_name, 0)
-                    qtd_faturada = info_f["qtd_faturada"]
-
-                    subtotal_apurado = qtd_apurada * v_unit
-                    subtotal_faturado = info_f["total_faturado"] if info_f["total_faturado"] > 0 else (qtd_faturada * v_unit)
-
-                    total_apurado_rs += subtotal_apurado
-                    total_faturado_rs += subtotal_faturado
-
-                    diff_qtd = qtd_apurada - qtd_faturada
-                    diff_val = subtotal_apurado - subtotal_faturado
-
-                    if diff_qtd > 0:
-                        status_detalhado = f"⚠️ Pendente de Faturamento (+{diff_qtd} un)"
-                    elif diff_qtd < 0:
-                        status_detalhado = f"🚨 Faturado a Maior ({diff_qtd} un)"
-                    else:
-                        status_detalhado = "✅ Conforme"
-
-                    tabela_comparativa.append({
-                        "Item Auditado": item_name,
-                        "Valor Unit. (Fatura)": f"R$ {v_unit:.2f}",
-                        "Qtd. Apurada (Canhotas)": f"{qtd_apurada} un",
-                        "Qtd. Faturada (Relatório)": f"{qtd_faturada} un",
-                        "Sobra/Falta (Qtd)": f"{diff_qtd:+d} un",
-                        "Subtotal Apurado": f"R$ {subtotal_apurado:.2f}",
-                        "Subtotal Faturado": f"R$ {subtotal_faturado:.2f}",
-                        "Impacto Financeiro": f"R$ {diff_val:+.2f}",
-                        "Status de Conformidade": status_detalhado
-                    })
-
-                # Exibição do Resumo
-                st.subheader("📋 Resumo Executivo da Auditoria")
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total Apurado (Validados)", f"R$ {total_apurado_rs:.2f}")
-                m2.metric("Total Faturado (Relatório)", f"R$ {total_faturado_rs:.2f}")
-                
-                diferenca = total_apurado_rs - total_faturado_rs
-                m3.metric("Divergência Financeira", f"R$ {diferenca:.2f}", delta_color="inverse")
-                
-                status_geral = "✅ APROVADO S/ RESSALVAS" if diferenca == 0 and len(canhotas_nao_identificadas) == 0 else "⚠️ REQUER ATENÇÃO / DIVERGENTE"
-                m4.metric("Status Geral", status_geral)
-
-                st.markdown("### 📊 Batimento Lado a Lado por Item (Auditado vs. Relatório)")
-                st.dataframe(pd.DataFrame(tabela_comparativa), use_container_width=True)
-
-                # Detalhamento por Colaborador
-                st.markdown("### 👤 Colaboradores Auditados e Validados")
-                if canhotas_identificadas:
-                    for c in canhotas_identificadas:
-                        mat = c["matricula"]
-                        nome = c["colaborador"]
-                        itens_txt = ", ".join([f"{it.get('quantidade',0)}x {it.get('item','Item')}" for it in c.get("itens",[])])
-                        
-                        with st.expander(f"🔹 {nome} (Matrícula: {mat}) - Itens: {itens_txt}"):
-                            st.write(f"**Status da Assinatura na Canhota:** {c.get('status_assinatura', 'N/A')}")
-                            
-                            gabaritos = []
-                            if os.path.exists("gabaritos") and mat != "N/A":
-                                for idx in [1, 2, 3]:
-                                    path = f"gabaritos/{mat}_{idx}.jpg"
-                                    if os.path.exists(path):
-                                        gabaritos.append(path)
-                            
-                            if gabaritos:
-                                st.success(f"✓ {len(gabaritos)} Gabarito(s) de assinatura validado(s).")
-                                cols = st.columns(len(gabaritos))
-                                for i, g_path in enumerate(gabaritos):
-                                    cols[i].image(g_path, caption=f"Matriz {i+1}")
-                            else:
-                                st.warning(f"⚠️ Nenhum gabarito cadastrado na pasta /gabaritos para a matrícula {mat}.")
-                else:
-                    st.info("Nenhuma canhota validada encontrada.")
-
-                if canhotas_nao_identificadas:
-                    st.markdown("---")
-                    st.error(f"🚨 **Atenção:** Constam {len(canhotas_nao_identificadas)} canhota(s) de colaboradores NÃO IDENTIFICADOS.")
-                    st.caption("Estes itens não foram computados no batimento oficial acima até que sejam regularizados.")
-                    
-                    for idx, c_ni in enumerate(canhotas_nao_identificadas, 1):
-                        itens_ni = ", ".join([f"{it.get('quantidade',0)}x {it.get('item','Item')}" for it in c_ni.get("itens",[])])
-                        st.warning(f"Exceção #{idx}: Colaborador Lido: '{c_ni.get('colaborador')}' | Matrícula Lido: '{c_ni.get('matricula')}' | Itens: {itens_ni} | Assinatura: {c_ni.get('status_assinatura')}")
-
-            except Exception as e:
-                st.error(f"Falha no processamento da auditoria: {str(e)}")
+        # Exibição Detalhada por Funcionário
+        st.markdown("### 👤 Detalhamento dos Colaboradores e Gabaritos")
+        for item_aud in canhotas_auditadas:
+            st_color = "✅" if item_aud["status_grafotecnico"] == "CONFORME" else "⚠️"
+            with st.expander(f"{st_color} {item_aud['colaborador']} (Matrícula: {item_aud['matricula']}) - Status Assinatura: {item_aud['status_grafotecnico']}"):
+                st.write(f"**Análise Grafotécnica da IA:** {item_aud['detalhe_grafotecnico']}")
+                if item_aud["gabarito_path"]:
+                    st.image(item_aud["gabarito_path"], width=300, caption="Gabarito Oficial Cadastrado")
