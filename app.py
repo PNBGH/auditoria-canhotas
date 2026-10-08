@@ -43,7 +43,7 @@ def identificar_colaborador(nome_lido):
     return None
 
 def limpar_e_parsear_json(texto_resposta):
-    """Garante a extração de JSON válido mesmo se o modelo retornar marcadores markdown."""
+    """Garante a extração de JSON válido eliminando formatação markdown."""
     if not texto_resposta:
         raise ValueError("A resposta da API retornou vazia.")
     texto_limpo = re.sub(r'^```json\s*', '', texto_resposta.strip(), flags=re.MULTILINE)
@@ -51,12 +51,37 @@ def limpar_e_parsear_json(texto_resposta):
     texto_limpo = re.sub(r'```$', '', texto_limpo, flags=re.MULTILINE).strip()
     return json.loads(texto_limpo)
 
+def obter_modelos_candidatos(client):
+    """Mapeia dinamicamente os modelos disponíveis na API e adiciona fallbacks padrão."""
+    modelos_prioritarios = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.5-flash"
+    ]
+    modelos_detectados = []
+    try:
+        for m in client.models.list():
+            nome = getattr(m, 'name', '') or getattr(m, 'model_id', '')
+            nome_limpo = nome.replace('models/', '')
+            methods = getattr(m, 'supported_generation_methods', []) or getattr(m, 'supported_actions', [])
+            if not methods or 'generateContent' in str(methods):
+                if nome_limpo and 'gemini' in nome_limpo and nome_limpo not in modelos_detectados:
+                    modelos_detectados.append(nome_limpo)
+    except Exception:
+        pass
+
+    # Garante a união preservando prioridade
+    lista_final = modelos_detectados + [m for m in modelos_prioritarios if m not in modelos_detectados]
+    return lista_final if lista_final else modelos_prioritarios
+
 def processar_com_fallback(client, prompt, contents):
-    modelos_candidatos = ["gemini-1.5-flash", "gemini-1.5-pro"]
+    modelos_candidatos = obter_modelos_candidatos(client)
     erros = []
 
     for modelo in modelos_candidatos:
-        for tentativa in range(3):
+        for tentativa in range(2):
             try:
                 response = client.models.generate_content(
                     model=modelo,
@@ -72,6 +97,8 @@ def processar_com_fallback(client, prompt, contents):
                 if any(code in msg for code in ["503", "429", "RESOURCE_EXHAUSTED"]):
                     time.sleep(2 * (tentativa + 1))
                     continue
+                if "404" in msg or "NOT_FOUND" in msg:
+                    break
                 break
     raise RuntimeError("Falha na comunicação com a API Gemini:\n" + "\n".join(erros))
 
