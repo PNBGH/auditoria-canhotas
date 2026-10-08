@@ -17,19 +17,21 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
-# Mapeamento de contingência cadastral: Nome -> Matrícula
+# Mapeamento cadastral de contingência: Nome -> Matrícula
 MAPA_COLABORADORES = {
     "ALDO GOMES": "1002",
+    "RICARDO TEIXEIRA": "1003",
+    "CLEITON": "1004"
 }
 
 def processar_com_fallback(client, prompt, contents):
     """
-    Executa chamadas à IA com redundância entre modelos da geração 3.x.
+    Executa chamadas à IA utilizando os modelos oficiais e ativos do Gemini.
     """
     modelos_candidatos = [
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro-preview"
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash"
     ]
     erros_acumulados = []
 
@@ -48,11 +50,9 @@ def processar_com_fallback(client, prompt, contents):
                 msg_erro = str(err)
                 erros_acumulados.append(f"[{modelo}] Tentativa {tentativa+1}: {msg_erro}")
                 
-                if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE"]):
-                    time.sleep(2 * (tentativa + 1))
+                if any(code in msg_erro for code in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
+                    time.sleep(3 * (tentativa + 1))
                     continue
-                elif "404" in msg_erro or "NOT_FOUND" in msg_erro:
-                    break
                 else:
                     break
 
@@ -141,14 +141,12 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                             nome = str(c.get("colaborador", "")).strip().upper()
                             mat = str(c.get("matricula", "N/A")).strip()
 
-                            # Associação por nome caso a matrícula esteja em branco
                             if mat in ["N/A", "", "None"] and nome in MAPA_COLABORADORES:
                                 mat = MAPA_COLABORADORES[nome]
 
                             c["matricula"] = mat
                             c["colaborador"] = nome if nome else "NÃO IDENTIFICADO"
 
-                            # Segregação: Identificados vs Não Identificados
                             if mat != "N/A" or nome in MAPA_COLABORADORES:
                                 canhotas_identificadas.append(c)
                             else:
@@ -178,7 +176,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                         qtd = int(it.get("quantidade", 0))
                         apurado_itens[nome_i] = apurado_itens.get(nome_i, 0) + qtd
 
-                # Construção da Tabela de Batimento Lado a Lado
+                # Construção da Tabela Comparativa
                 todos_itens = sorted(list(set(list(fatura_itens.keys()) + list(apurado_itens.keys()))))
                 
                 tabela_comparativa = []
@@ -201,19 +199,29 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                     total_apurado_rs += subtotal_apurado
                     total_faturado_rs += subtotal_faturado
 
-                    status = "✅ Conforme" if qtd_apurada == qtd_faturada and qtd_faturada > 0 else "❌ Divergente"
+                    diff_qtd = qtd_apurada - qtd_faturada
+                    diff_val = subtotal_apurado - subtotal_faturado
+
+                    if diff_qtd > 0:
+                        status_detalhado = f"⚠️ Pendente de Faturamento (+{diff_qtd} un)"
+                    elif diff_qtd < 0:
+                        status_detalhado = f"🚨 Faturado a Maior ({diff_qtd} un)"
+                    else:
+                        status_detalhado = "✅ Conforme"
 
                     tabela_comparativa.append({
                         "Item Auditado": item_name,
                         "Valor Unit. (Fatura)": f"R$ {v_unit:.2f}",
                         "Qtd. Apurada (Canhotas)": f"{qtd_apurada} un",
                         "Qtd. Faturada (Relatório)": f"{qtd_faturada} un",
+                        "Sobra/Falta (Qtd)": f"{diff_qtd:+d} un",
                         "Subtotal Apurado": f"R$ {subtotal_apurado:.2f}",
                         "Subtotal Faturado": f"R$ {subtotal_faturado:.2f}",
-                        "Status de Conformidade": status
+                        "Impacto Financeiro": f"R$ {diff_val:+.2f}",
+                        "Status de Conformidade": status_detalhado
                     })
 
-                # Exibição do Relatório de Auditoria
+                # Exibição do Resumo
                 st.subheader("📋 Resumo Executivo da Auditoria")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Total Apurado (Validados)", f"R$ {total_apurado_rs:.2f}")
@@ -228,7 +236,7 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 st.markdown("### 📊 Batimento Lado a Lado por Item (Auditado vs. Relatório)")
                 st.dataframe(pd.DataFrame(tabela_comparativa), use_container_width=True)
 
-                # Detalhamento por Colaborador Validado
+                # Detalhamento por Colaborador
                 st.markdown("### 👤 Colaboradores Auditados e Validados")
                 if canhotas_identificadas:
                     for c in canhotas_identificadas:
@@ -239,7 +247,6 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                         with st.expander(f"🔹 {nome} (Matrícula: {mat}) - Itens: {itens_txt}"):
                             st.write(f"**Status da Assinatura na Canhota:** {c.get('status_assinatura', 'N/A')}")
                             
-                            # Busca Gabaritos
                             gabaritos = []
                             if os.path.exists("gabaritos") and mat != "N/A":
                                 for idx in [1, 2, 3]:
@@ -257,7 +264,6 @@ if st.button("🚀 Executar Auditoria Mensal", type="primary"):
                 else:
                     st.info("Nenhuma canhota validada encontrada.")
 
-                # Painel de Exceções: Colaboradores Não Identificados
                 if canhotas_nao_identificadas:
                     st.markdown("---")
                     st.error(f"🚨 **Atenção:** Constam {len(canhotas_nao_identificadas)} canhota(s) de colaboradores NÃO IDENTIFICADOS.")
