@@ -9,28 +9,38 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="Auditoria Automatizada de Canhotas", layout="wide")
-st.title("🛡️ Sistema de Auditoria Grafotécnica e Financeira")
+st.set_page_config(page_title="Auditoria de Canhotas v1.0", layout="wide")
+st.title("🛡️ Painel de Auditoria Operacional e Grafotécnica (v1.0 - Por Nome)")
 
 api_key = st.secrets.get("GEMINI_API_KEY")
 if not api_key:
-    st.error("Chave GEMINI_API_KEY não encontrada nos Secrets.")
+    st.error("Chave GEMINI_API_KEY não encontrada nos Secrets do Streamlit.")
     st.stop()
 
 client = genai.Client(api_key=api_key)
 
-# Cadastro Centralizado de Colaboradores (Nome Normalizado -> Matrícula)
-MAPA_COLABORADORES = {
-    "ALDO GOMES": "1002",
-    "RICARDO TEIXEIRA": "1003",
-    "CLEITON": "1004"
-}
+# Lista Oficial de Colaboradores Cadastrados
+COLABORADORES_CADASTRADOS = [
+    "ALDO GOMES",
+    "RICARDO TEIXEIRA",
+    "CLEITON"
+]
 
-def normalizar_texto(texto):
+def normalizar_nome_arquivo(texto):
+    """Converte 'Aldo Gomes' em 'ALDO_GOMES' para busca de arquivos."""
     if not texto:
-        return ""
-    texto = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode("utf-8")
-    return re.sub(r'[^A-Z0-9 ]', '', texto.upper().strip())
+        return "DESCONHECIDO"
+    texto_norm = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode("utf-8")
+    texto_limpo = re.sub(r'[^A-Z0-9 ]', '', texto_norm.upper().strip())
+    return texto_limpo.replace(" ", "_")
+
+def identificar_colaborador(nome_lido):
+    """Mapeia variações de leitura para a lista oficial cadastrada."""
+    nome_norm = normalizar_nome_arquivo(nome_lido).replace("_", " ")
+    for colab in COLABORADORES_CADASTRADOS:
+        if colab in nome_norm or nome_norm in colab:
+            return colab
+    return None
 
 def processar_com_fallback(client, prompt, contents):
     modelos_candidatos = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
@@ -54,20 +64,21 @@ def processar_com_fallback(client, prompt, contents):
                     time.sleep(2 * (tentativa + 1))
                     continue
                 break
-    raise RuntimeError("Falha na comunicação com a IA. Detalhes: " + " | ".join(erros))
+    raise RuntimeError("Falha na comunicação com a API Gemini. Log: " + " | ".join(erros))
 
-# Interface
+# Interface de Entrada
 col1, col2 = st.columns(2)
 with col1:
-    canhotas_files = st.file_uploader("1. Canhotas Recebidas", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+    canhotas_files = st.file_uploader("1. Lote de Canhotas (PDF ou Imagem)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 with col2:
     fatura_file = st.file_uploader("2. Fatura / Relatório Mensal", type=["pdf", "png", "jpg", "jpeg"])
 
-if st.button("🚀 Executar Auditoria de Precisão", type="primary"):
+if st.button("🚀 Executar Auditoria", type="primary"):
     if not canhotas_files or not fatura_file:
-        st.warning("Envie os arquivos para iniciar a auditoria.")
+        st.warning("Envie as canhotas e a fatura para iniciar.")
     else:
-        with st.spinner("Analisando Fatura e Contrato..."):
+        # Etapa 1: Processar Fatura
+        with st.spinner("Analisando Fatura e extraindo itens..."):
             fatura_contents = []
             if fatura_file.type == "application/pdf":
                 fatura_contents.append(types.Part.from_bytes(data=fatura_file.read(), mime_type="application/pdf"))
@@ -78,89 +89,81 @@ if st.button("🚀 Executar Auditoria de Precisão", type="primary"):
             Extraia os itens faturados no formato JSON estrito:
             {
                 "itens_fatura": [
-                    {"item": "nome", "quantidade": 0, "valor_unitario": 0.0, "valor_total": 0.0}
+                    {"item": "nome do item", "quantidade": 0, "valor_unitario": 0.0, "valor_total": 0.0}
                 ],
                 "valor_total_fatura": 0.0
             }
             """
             dados_fatura = processar_com_fallback(client, prompt_fatura, fatura_contents)
 
-        with st.spinner("Processando Auditoria Grafotécnica nas Canhotas..."):
+        # Etapa 2: Processar Canhotas e Checar Assinatura
+        with st.spinner("Analisando canhotas e executando perícia grafotécnica..."):
             canhotas_auditadas = []
 
             for c_file in canhotas_files:
-                c_image = Image.open(c_file) if c_file.type != "application/pdf" else None
-                c_contents = [types.Part.from_bytes(data=c_file.read(), mime_type="application/pdf")] if c_file.type == "application/pdf" else [c_image]
+                if c_file.type == "application/pdf":
+                    c_contents = [types.Part.from_bytes(data=c_file.read(), mime_type="application/pdf")]
+                else:
+                    c_contents = [Image.open(c_file)]
 
-                # Etapa A: Leitura do Nome/Matrícula
                 prompt_leitura = """
                 Analise esta canhota e extraia:
                 {
-                    "colaborador": "NOME DO COLABORADOR ou N/A",
-                    "matricula": "Apenas números ou N/A",
-                    "itens": [{"item": "nome", "quantidade": 1}]
+                    "colaborador": "NOME COMPLETO LIDO no papel ou N/A",
+                    "itens": [
+                        {"item": "nome do item", "quantidade": 1}
+                    ]
                 }
                 """
                 res_leitura = processar_com_fallback(client, prompt_leitura, c_contents)
                 
-                nome_bruto = res_leitura.get("colaborador", "")
-                nome_norm = normalizar_texto(nome_bruto)
-                mat = str(res_leitura.get("matricula", "N/A")).strip()
+                nome_lido = res_leitura.get("colaborador", "N/A")
+                colaborador_oficial = identificar_colaborador(nome_lido)
 
-                # Busca de Matrícula por Inteligência de Cadastro
-                if mat in ["N/A", "", "None"]:
-                    for nome_cad, mat_cad in MAPA_COLABORADORES.items():
-                        if nome_cad in nome_norm or nome_norm in nome_cad:
-                            mat = mat_cad
-                            break
-
-                # Etapa B: Comparação Grafotécnica com Gabarito
-                gabarito_path = f"gabaritos/{mat}_1.jpg"
+                # Busca o gabarito pelo nome normalizado
                 status_grafotecnico = "SEM_GABARITO"
-                detalhe_grafotecnico = "Nenhum gabarito oficial cadastrado no repositório."
+                detalhe_grafotecnico = "Sem imagem de referência na pasta /gabaritos."
+                gabarito_path = None
 
-                if os.path.exists(gabarito_path):
-                    gabarito_img = Image.open(gabarito_path)
-                    
-                    prompt_grafotecnico = """
-                    Você é um perito grafotécnico. Compare a ASSINATURA presente na CANHOTA com a ASSINATURA DO GABARITO OFICIAL fornecida.
-                    Responda estritamente no formato JSON:
-                    {
-                        "resultado_assinatura": "CONFORME" ou "SUSPEITA_DIVERGENCIA" ou "AUSENTE",
-                        "justificativa": "breve explicação dos traços, inclinação ou divergência observada"
-                    }
-                    """
-                    # Envia a canhota e a imagem de gabarito para a IA comparar
-                    inputs_comparacao = c_contents + [gabarito_img]
-                    res_grafo = processar_com_fallback(client, prompt_grafotecnico, inputs_comparacao)
-                    
-                    status_grafotecnico = res_grafo.get("resultado_assinatura", "SUSPEITA_DIVERGENCIA")
-                    detalhe_grafotecnico = res_grafo.get("justificativa", "")
+                if colaborador_oficial:
+                    chave_arquivo = normalizar_nome_arquivo(colaborador_oficial)
+                    path_tentativa = f"gabaritos/{chave_arquivo}.jpg"
+
+                    if os.path.exists(path_tentativa):
+                        gabarito_path = path_tentativa
+                        gabarito_img = Image.open(gabarito_path)
+
+                        prompt_grafotecnico = """
+                        Compare a ASSINATURA presente no documento de canhota com a ASSINATURA DO GABARITO DE REFERÊNCIA.
+                        Responda em JSON estrito:
+                        {
+                            "resultado_assinatura": "CONFORME" ou "SUSPEITA_DIVERGENCIA" ou "AUSENTE",
+                            "justificativa": "resumo direto dos traços e semelhança observada"
+                        }
+                        """
+                        res_grafo = processar_com_fallback(client, prompt_grafotecnico, c_contents + [gabarito_img])
+                        status_grafotecnico = res_grafo.get("resultado_assinatura", "SUSPEITA_DIVERGENCIA")
+                        detalhe_grafotecnico = res_grafo.get("justificativa", "")
 
                 canhotas_auditadas.append({
-                    "colaborador": nome_norm if nome_norm else "NÃO IDENTIFICADO",
-                    "matricula": mat,
+                    "colaborador_lido": nome_lido,
+                    "colaborador_oficial": colaborador_oficial if colaborador_oficial else "NÃO CADASTRADO",
                     "itens": res_leitura.get("itens", []),
                     "status_grafotecnico": status_grafotecnico,
                     "detalhe_grafotecnico": detalhe_grafotecnico,
-                    "gabarito_path": gabarito_path if os.path.exists(gabarito_path) else None
+                    "gabarito_path": gabarito_path
                 })
 
-        # Exibição do Painel
-        st.subheader("📊 Painel Executivo de Auditoria")
+        # Exibição dos Resultados
+        st.subheader("📋 Resultado da Auditoria Operacional")
         
-        # Alertas Grafotécnicos (Exceções)
-        suspeitas = [c for c in canhotas_auditadas if c["status_grafotecnico"] == "SUSPEITA_DIVERGENCIA"]
-        if suspeitas:
-            st.error(f"🚨 **ALERTA GRAFOTÉCNICO:** {len(suspeitas)} assinatura(s) apresentaram divergência com o gabarito oficial!")
-            for s in suspeitas:
-                st.warning(f" Colaborador: **{s['colaborador']}** (Matrícula: {s['matricula']}) | Parecer da IA: {s['detalhe_grafotecnico']}")
-
-        # Exibição Detalhada por Funcionário
-        st.markdown("### 👤 Detalhamento dos Colaboradores e Gabaritos")
-        for item_aud in canhotas_auditadas:
-            st_color = "✅" if item_aud["status_grafotecnico"] == "CONFORME" else "⚠️"
-            with st.expander(f"{st_color} {item_aud['colaborador']} (Matrícula: {item_aud['matricula']}) - Status Assinatura: {item_aud['status_grafotecnico']}"):
-                st.write(f"**Análise Grafotécnica da IA:** {item_aud['detalhe_grafotecnico']}")
-                if item_aud["gabarito_path"]:
-                    st.image(item_aud["gabarito_path"], width=300, caption="Gabarito Oficial Cadastrado")
+        for idx, c_audit in enumerate(canhotas_auditadas, 1):
+            st_icon = "✅" if c_audit["status_grafotecnico"] == "CONFORME" else "⚠️"
+            with st.expander(f"{st_icon} Canhota #{idx} - Colaborador: {c_audit['colaborador_oficial']} (Lido: '{c_audit['colaborador_lido']}')"):
+                st.write(f"**Parecer Grafotécnico da IA:** {c_audit['status_grafotecnico']}")
+                st.caption(f"Detalhes: {c_audit['detalhe_grafotecnico']}")
+                
+                if c_audit["gabarito_path"]:
+                    st.image(c_audit["gabarito_path"], width=280, caption=f"Gabarito Oficial ({c_audit['colaborador_oficial']})")
+                else:
+                    st.warning(f"Para habilitar a validação automática deste colaborador, salve o gabarito como `gabaritos/{normalizar_nome_arquivo(c_audit['colaborador_lido'])}.jpg` no GitHub.")
