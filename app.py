@@ -43,7 +43,8 @@ def identificar_colaborador(nome_lido):
     return None
 
 def processar_com_fallback(client, prompt, contents):
-    modelos_candidatos = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+    # Modelos atualizados e suportados na API
+    modelos_candidatos = ["gemini-1.5-flash", "gemini-1.5-pro"]
     erros = []
 
     for modelo in modelos_candidatos:
@@ -101,6 +102,8 @@ if st.button("🚀 Executar Auditoria", type="primary"):
             canhotas_auditadas = []
 
             for c_file in canhotas_files:
+                # Restaura o ponteiro caso o arquivo tenha sido lido previamente
+                c_file.seek(0)
                 if c_file.type == "application/pdf":
                     c_contents = [types.Part.from_bytes(data=c_file.read(), mime_type="application/pdf")]
                 else:
