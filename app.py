@@ -127,7 +127,7 @@ if st.button("🚀 Executar Auditoria", type="primary"):
 
             # Etapa 2: Leitura e Perícia das Canhotas
             with st.spinner(f"Auditando lote de {len(canhotas_files)} canhotas..."):
-                 canhotas_processadas = []
+                canhotas_processadas = []
 
                 for c_file in canhotas_files:
                     c_file.seek(0)
@@ -187,7 +187,7 @@ if st.button("🚀 Executar Auditoria", type="primary"):
                         "gabarito_path": gabarito_path
                     })
 
-            # Consolidated Metrics Calculation
+            # Cálculo de Métricas Consolidadas
             total_auditado = sum(item["quantidade"] for item in canhotas_processadas if item["status_grafotecnico"] == "CONFORME")
             diferenca = total_auditado - total_exigido_fatura
 
@@ -208,7 +208,7 @@ if st.button("🚀 Executar Auditoria", type="primary"):
             st.divider()
             st.subheader("👥 Relação de Colaboradores Validados")
 
-            # Grouping by Collaborator
+            # Agrupamento por Colaborador
             df_canhotas = pd.DataFrame(canhotas_processadas)
             
             for colab, group in df_canhotas.groupby("colaborador_oficial"):
