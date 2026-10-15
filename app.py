@@ -80,7 +80,8 @@ def processar_com_fallback(client, prompt, contents):
                     model=modelo,
                     contents=[prompt] + contents,
                     config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
+                        response_mime_type="application/json",
+                        temperature=0.0  # TRAVAMENTO DETERMINÍSTICO (Zero variabilidade)
                     ),
                 )
                 return limpar_e_parsear_json(response.text)
@@ -116,7 +117,9 @@ if st.button("🚀 Executar Auditoria", type="primary"):
                     fatura_contents = [Image.open(fatura_file)]
 
                 prompt_fatura = """
-                Extraia a quantidade total de itens/serviços prestados constantes na fatura no formato JSON:
+                Analise o relatório/fatura mensal e extraia o TOTAL GERAL DE PEÇAS/SERVIÇOS FATURADOS (somatório de todas as quantidades de itens do documento).
+
+                Responda exclusivamente no formato JSON estrito:
                 {
                     "quantidade_total_faturada": 0,
                     "valor_total_fatura": 0.0
@@ -142,9 +145,10 @@ if st.button("🚀 Executar Auditoria", type="primary"):
                     prompt_leitura = """
                     Analise esta canhota e extraia:
                     {
-                        "colaborador": "NOME COMPLETO LIDO no papel ou N/A",
+                        "colaborador": "NOME COMPLETO LIDO no campo 'Colaborador' ou N/A",
                         "quantidade": 1
                     }
+                    Note: A quantidade deve ser um número inteiro extraído do total de peças do documento.
                     """
                     res_leitura = processar_com_fallback(client, prompt_leitura, c_contents)
                     
@@ -165,11 +169,18 @@ if st.button("🚀 Executar Auditoria", type="primary"):
                             gabarito_img = Image.open(gabarito_path)
 
                             prompt_grafotecnico = """
-                            Compare a ASSINATURA do documento com a ASSINATURA DO GABARITO DE REFERÊNCIA.
+                            Você é um perito grafotécnico automatizado. Compare a ASSINATURA do documento de canhota com a ASSINATURA DO GABARITO DE REFERÊNCIA.
+
+                            DIRETRIZES DE AUDITORIA:
+                            - Analise a estrutura morfológica dos traços, a inclinação geral e as letras maiúsculas/iniciais.
+                            - Ignore pequenas divergências provocadas por iluminação, compressão da foto, ângulo da câmera ou textura do papel.
+                            - Classifique como 'CONFORME' se a caligrafia indicar o mesmo punho escritor do gabarito.
+                            - Classifique como 'SUSPEITA_DIVERGENCIA' apenas se for visivelmente uma assinatura de outra pessoa ou fraude evidente.
+
                             Responda em JSON estrito:
                             {
                                 "resultado_assinatura": "CONFORME" ou "SUSPEITA_DIVERGENCIA" ou "AUSENTE",
-                                "justificativa": "resumo direto dos traços e semelhança observada"
+                                "justificativa": "resumo objetivo dos traços e convergências observadas"
                             }
                             """
                             res_grafo = processar_com_fallback(client, prompt_grafotecnico, c_contents + [gabarito_img])
@@ -208,7 +219,6 @@ if st.button("🚀 Executar Auditoria", type="primary"):
             st.divider()
             st.subheader("👥 Relação de Colaboradores Validados")
 
-            # Agrupamento por Colaborador
             df_canhotas = pd.DataFrame(canhotas_processadas)
             
             for colab, group in df_canhotas.groupby("colaborador_oficial"):
